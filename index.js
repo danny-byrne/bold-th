@@ -4,115 +4,133 @@ const path = require("node:path");
 
 const { parse } = csv;
 
-// Construct the file paths to read CSV files
-const slcspFilePath = path.join(__dirname, "assets", "slcsp.csv");
-const plansFilePath = path.join(__dirname, "assets", "plans.csv");
-const zipsFilePath = path.join(__dirname, "assets", "zips.csv");
-const outputFilePath = path.join(__dirname, "assets", "output.csv"); // New output file path
+class SLCSPPricer {
+  constructor(slcspFilePath, plansFilePath, zipsFilePath, outputFilePath) {
+    this.slcspFilePath = slcspFilePath;
+    this.plansFilePath = plansFilePath;
+    this.zipsFilePath = zipsFilePath;
+    this.outputFilePath = outputFilePath;
+    this.slcspRows = [];
+    this.plansRows = [];
+    this.zipsRows = [];
+    this.zipsToRateAreas = {};
+  }
 
-// Read CSV files
-let slcspRows = [];
-let plansRows = [];
-let zipsRows = [];
-let zipsToRateAreas = {};
+  async readCSV() {
+    await this.readZipCSV();
+    await this.readPlansCSV();
+    await this.readSlcspCSV();
+  }
 
-const readCSV = async () => {
-  await new Promise((resolve, reject) => {
-    fs.createReadStream(zipsFilePath)
-      .pipe(parse({ delimiter: "," }))
-      .on("data", (row) => {
-        zipsRows.push(row);
-      })
-      .on("end", () => {
-        zipsToRateAreas = processZipToRate();
-        resolve();
-      });
-  });
+  async readZipCSV() {
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(this.zipsFilePath)
+        .pipe(parse({ delimiter: "," }))
+        .on("data", (row) => {
+          this.zipsRows.push(row);
+        })
+        .on("end", () => {
+          this.zipsToRateAreas = this.processZipToRate();
+          resolve();
+        });
+    });
+  }
 
-  await new Promise((resolve, reject) => {
-    fs.createReadStream(plansFilePath)
-      .pipe(parse({ delimiter: "," }))
-      .on("data", (row) => {
-        plansRows.push(row);
-      })
-      .on("end", resolve);
-  });
+  async readPlansCSV() {
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(this.plansFilePath)
+        .pipe(parse({ delimiter: "," }))
+        .on("data", (row) => {
+          this.plansRows.push(row);
+        })
+        .on("end", resolve);
+    });
+  }
 
-  await new Promise((resolve, reject) => {
-    fs.createReadStream(slcspFilePath)
-      .pipe(parse({ delimiter: "," }))
-      .on("data", (row) => {
-        slcspRows.push(row);
-      })
-      .on("end", () => {
-        processSlcspRows();
-        resolve();
-      });
-  });
-};
+  async readSlcspCSV() {
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(this.slcspFilePath)
+        .pipe(parse({ delimiter: "," }))
+        .on("data", (row) => {
+          this.slcspRows.push(row);
+        })
+        .on("end", () => {
+          this.processSlcspRows();
+          resolve();
+        });
+    });
+  }
 
-readCSV();
-
-const silver = "Silver",
-  duplicate = "duplicate";
-
-function processZipToRate() {
-  const zipToRateArea = {};
-  for (let i = 1; i < zipsRows.length; i++) {
-    const [zip, state, , , rateArea] = zipsRows[i];
-    const stateAndRate = `${state} ${rateArea}`;
-    if (!zipToRateArea[zip]) {
-      zipToRateArea[zip] = stateAndRate;
-      //if a duplicate is found, set the value to duplicate
-    } else if (zipToRateArea[zip] && stateAndRate !== zipToRateArea[zip]) {
-      zipToRateArea[zip] = duplicate;
+  processZipToRate() {
+    const zipToRateArea = {};
+    for (let i = 1; i < this.zipsRows.length; i++) {
+      const [zip, state, , , rateArea] = this.zipsRows[i];
+      const stateAndRate = `${state} ${rateArea}`;
+      if (!zipToRateArea[zip]) {
+        zipToRateArea[zip] = stateAndRate;
+      } else if (
+        zipToRateArea[zip] !== stateAndRate &&
+        zipToRateArea[zip] !== "duplicate"
+      ) {
+        zipToRateArea[zip] = "duplicate";
+      }
     }
+    this.zipsToRateAreas = zipToRateArea; // Update the zipsToRateAreas property
+    return zipToRateArea;
   }
 
-  return zipToRateArea;
-}
-
-function processSlcspRows() {
-  const outputData = ["zipcode, rate"]; // Array to store output data
-  for (let i = 1; i < slcspRows.length; i++) {
-    const [zip] = slcspRows[i];
-    const stateAndRateArea = zipsToRateAreas[zip];
-
-    const slcspRate =
-      stateAndRateArea === duplicate
-        ? ""
-        : findSecondLowestSilverPlanRate(plansRows, stateAndRateArea);
-    const outputLine = slcspRate ? `${zip},${slcspRate.toFixed(2)}` : `${zip},`;
-    outputData.push(outputLine); // Add the output line to the array
-  }
-  fs.writeFileSync(outputFilePath, outputData.join("\n"));
-}
-
-// Function to find the second lowest silver plan rate for a given rate area
-function findSecondLowestSilverPlanRate(plans, stateAndRate) {
-  const [rateState, rateArea] = stateAndRate.split(" ");
-  //prevent duplicate rates being added by using a set
-  const silverPlanRatesInArea = plans.reduce((uniqueRates, plan) => {
-    const [, planState, metalLevel, rate, planRateArea] = plan;
-    const isARateAreaMatch =
-      metalLevel === silver &&
-      planRateArea === rateArea &&
-      planState === rateState;
-    if (isARateAreaMatch) {
-      uniqueRates.add(rate);
+  processSlcspRows() {
+    const outputData = ["zipcode, rate"]; // Array to store output data
+    for (let i = 1; i < this.slcspRows.length; i++) {
+      const [zip] = this.slcspRows[i];
+      const stateAndRateArea = this.zipsToRateAreas[zip];
+      const slcspRate =
+        stateAndRateArea === "duplicate"
+          ? ""
+          : this.findSecondLowestSilverPlanRate(stateAndRateArea);
+      const outputLine = slcspRate
+        ? `${zip},${slcspRate.toFixed(2)}`
+        : `${zip},`;
+      outputData.push(outputLine); // Add the output line to the array
     }
-    return uniqueRates;
-  }, new Set());
-
-  const uniqueRatesArray = Array.from(silverPlanRatesInArea);
-  // Not enough silver plans to determine SLCSP
-  if (uniqueRatesArray.length < 2) {
-    return;
+    fs.writeFileSync(this.outputFilePath, outputData.join("\n"));
   }
 
-  const sortedRates = uniqueRatesArray
-    .map((rate) => parseFloat(rate))
-    .sort((a, b) => a - b);
+  findSecondLowestSilverPlanRate(stateAndRate) {
+    const [rateState, rateArea] = stateAndRate.split(" ");
+    const silverPlanRatesInArea = this.plansRows.reduce((uniqueRates, plan) => {
+      const [, planState, metalLevel, rate, planRateArea] = plan;
+      const isARateAreaMatch =
+        metalLevel === "Silver" &&
+        planRateArea === rateArea &&
+        planState === rateState;
+      if (isARateAreaMatch) {
+        uniqueRates.add(rate);
+      }
+      return uniqueRates;
+    }, new Set());
 
-  return sortedRates[1];
+    const uniqueRatesArray = Array.from(silverPlanRatesInArea);
+    if (uniqueRatesArray.length < 2) {
+      return;
+    }
+
+    const sortedRates = uniqueRatesArray
+      .map((rate) => parseFloat(rate))
+      .sort((a, b) => a - b);
+
+    return sortedRates[1];
+  }
 }
+
+// Usage
+const slcspPricer = new SLCSPPricer(
+  path.join(__dirname, "assets", "slcsp.csv"),
+  path.join(__dirname, "assets", "plans.csv"),
+  path.join(__dirname, "assets", "zips.csv"),
+  path.join(__dirname, "assets", "output.csv")
+);
+
+slcspPricer.readCSV();
+
+module.exports = SLCSPPricer;
